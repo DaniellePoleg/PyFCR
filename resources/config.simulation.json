@@ -1,0 +1,16 @@
+{
+  "fcr_type": 1,
+  "run_type": "simulation",
+  "n_simulations": 3,
+  "members_in_cluster": 2,
+  "competing_risks": 2,
+  "n_clusters": 500,
+  "uniform": true,
+  "beta_coefficients": [0.5, 2.5],
+  "frailty_mean": [0, 0],
+  "frailty_covariance": [[1, 0.5], [0.5, 1.5]],
+  "has_censoring": true,
+  "bootstrap": 3,
+  "thresholds_cumulative_hazards": [0.1, 0.15, 0.20, 0.25],
+  "calculate_event_types": true
+}

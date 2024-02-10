@@ -1,0 +1,13 @@
+{
+  "fcr_type": 1,
+  "run_type": "analysis",
+  "members_in_cluster": 2,
+  "competing_risks": 2,
+  "n_clusters": 500,
+  "n_covariates": 2,
+  "uniform": true,
+  "bootstrap": 20,
+  "thresholds_cumulative_hazards": [0.1, 0.15, 0.20, 0.25],
+  "calculate_event_types": true,
+  "data_path": "C:\\Users\\dapole\\PycharmProjects\\pythonProject\\BiometricsModel\\data"
+}
