@@ -55,6 +55,9 @@ class CMakeBuild(build_ext):
 
 
 exec(Path("pyfcr", "version.py").open().read())
+with open('requirements.txt') as f:
+    requirements = f.read().splitlines()
+
 setup(
     name='PyFCR',
     version=__version__,
@@ -66,5 +69,6 @@ setup(
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
     packages=find_packages(),
-    python_requires="~=3.10"
+    python_requires="~=3.10",
+    install_requires=requirements
 )

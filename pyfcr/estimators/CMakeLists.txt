@@ -26,6 +26,17 @@ target_compile_definitions(_estimators PRIVATE VERSION_INFO=${VERSION_INFO})
 target_include_directories(_estimators PRIVATE ${Python_INCLUDE_DIRS})
 target_link_libraries(_estimators PRIVATE ${Python_LIBRARIES})
 
+target_compile_options(_estimators PRIVATE
+    $<$<CXX_COMPILER_ID:GNU>:-static-libgcc -static-libstdc++>
+    $<$<CXX_COMPILER_ID:GNU>:$<$<BOOL:${MINGW}>:-static>>
+)
+
+target_link_options(_estimators PRIVATE
+    $<$<CXX_COMPILER_ID:GNU>:-static-libgcc -static-libstdc++>
+    $<$<CXX_COMPILER_ID:GNU>:$<$<BOOL:${MINGW}>:-static>>
+)
+
+
 message(STATUS "Python Include Directories: ${PYTHON_INCLUDE_DIRS}")
 message(STATUS "Python Libraries: ${PYTHON_LIBRARIES}")
 message(STATUS "Python Executable: ${PYTHON_EXECUTABLE}")
