@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import ninja
 from pathlib import Path
 
 from setuptools import Extension, setup, find_packages
@@ -31,6 +30,7 @@ class CMakeBuild(build_ext):
         # In this example, we pass in the version to C++. You might not need to.
         cmake_args += [f"-DVERSION_INFO={__version__}"]
 
+        import ninja
         ninja_executable_path = Path(ninja.BIN_DIR) / "ninja"
         cmake_args += [
             "-GNinja",
@@ -46,11 +46,13 @@ class CMakeBuild(build_ext):
         if not build_temp.exists():
             build_temp.mkdir(parents=True)
 
+        import cmake
+        cmake_path = str(Path(cmake.CMAKE_BIN_DIR, "cmake"))
         subprocess.run(
-            ["cmake", ext.sourcedir, *cmake_args], cwd=build_temp, check=True
+            [cmake_path, ext.sourcedir, *cmake_args], cwd=build_temp, check=True
         )
         subprocess.run(
-            ["cmake", "--build", ".", *build_args], cwd=build_temp, check=True
+            [cmake_path, "--build", ".", *build_args], cwd=build_temp, check=True
         )
 
 
