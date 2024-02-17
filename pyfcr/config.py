@@ -34,7 +34,7 @@ class Config:
                  beta_coefficients: list = [0.5, 2.5],
                  frailty_mean: list = [0, 0],
                  frailty_covariance: list = [[1, 0.5], [0.5, 1.5]],
-                 censoring_method: Callable = np.random.uniform(0, 0.3, 1),
+                 censoring_method: Callable = lambda: np.random.uniform(0, 0.3, 1),
                  n_covariates: int = None,
                  data_path: Path = None):
         '''
