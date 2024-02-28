@@ -57,9 +57,13 @@ class Runner:
         self.cumulative_hazards_res = None
 
     def run(self):
+        self.model.simulate_data()
+        self.bootstrap_run()
+
+    def bootstrap_run(self):
         raise NotImplementedError
 
-    def get_beta_z(self, beta_hat):
+    def get_beta_z(self):
         raise NotImplementedError
 
     def get_survival_formula_and_data(self, X, frailty_exponent, cur_competing_risk):
@@ -92,6 +96,12 @@ class Runner:
     def get_cumulative_hazard_estimators(self):
         raise NotImplementedError
 
+    def calculate_empirical_variance(self, estimators, mean):
+        x = np.array([np.power(estimators[i, :, :] - mean, 2)
+                      for i in range(self.model.n_simulations)])
+        sums = np.sum(x, where=~np.isnan(x), axis=0)
+        return sums / (self.model.n_simulations - 1)
+
     def get_multiple_confidence_intervals(self):
         a = calculate_conf_interval(self.beta_coefficients_res, self.model.n_competing_risks)
         b = calculate_conf_interval(self.frailty_covariance_res, self.model.n_competing_risks)
@@ -99,8 +109,21 @@ class Runner:
         conf_int = np.concatenate([a.reshape(-1), b.reshape(-1), c.reshape(-1)])
         return conf_int
 
-    def print_summary(self) -> None:
+    def reshape_estimators_from_df(self, estimators_df, n_repeats):
+        shapes = self.get_estimators_dimensions(n_repeats)
+        beta_coefficients_res = np.vstack(estimators_df.iloc[:, 0]).reshape(shapes[0])
+        frailty_covariance_res = np.vstack(estimators_df.iloc[:, 1]).reshape(shapes[1])
+        cumulative_hazards_res = np.vstack(estimators_df.iloc[:, 2]).reshape(shapes[2])
+        return beta_coefficients_res, frailty_covariance_res, cumulative_hazards_res
+
+    def get_estimators_dimensions(self, n_repeats: int) -> list:
         raise NotImplementedError
+
+    def analyze_statistical_results(self, empirical_run: bool) -> None:
+        raise NotImplementedError
+
+    def print_summary(self) -> None:
+        self.analyze_statistical_results(empirical_run=True)
 
     def visualize_results(self) -> None:
         visualize_results(self.beta_coefficients_res, self.frailty_covariance_res)

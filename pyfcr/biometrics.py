@@ -90,11 +90,7 @@ class BiometricsRunner(Runner):
         self.cumulative_hazards_estimators = []
         self.estimators_df = pd.DataFrame(columns=['betas', 'frailty_covariance', 'cumulative_hazards'])
 
-    def run(self):
-        self.bootstrap_run()
-
     def bootstrap_run(self):
-        self.estimators_df = pd.DataFrame(columns=['betas', 'frailty_covariance', 'cumulative_hazards'])
         for boot in range(self.model.n_bootstrap):
             random_cox_weights = np.random.exponential(size=(self.model.n_clusters,))
             self.random_cox_weights = random_cox_weights / random_cox_weights.mean()
@@ -188,21 +184,10 @@ class BiometricsRunner(Runner):
                         cumulative_hazard[cumulative_hazard.x > threshold].index[0]]
         return cumulative_hazards_at_points
 
-    def reshape_estimators_from_df(self, estimators_df, n_repeats):
-        shapes = [(n_repeats, self.model.n_competing_risks, self.model.n_covariates),
+    def get_estimators_dimensions(self, n_repeats):
+        return [(n_repeats, self.model.n_competing_risks, self.model.n_covariates),
                   (n_repeats, self.model.n_competing_risks, self.model.n_competing_risks),
                   (n_repeats, self.model.n_competing_risks, self.model.n_threshold_cum_hazard)]
-        beta_coefficients_res = np.vstack(estimators_df.iloc[:, 0]).reshape(shapes[0])
-        frailty_covariance_res = np.vstack(estimators_df.iloc[:, 1]).reshape(shapes[1])
-        cumulative_hazards_res = np.vstack(estimators_df.iloc[:, 2]).reshape(shapes[2])
-        return beta_coefficients_res, frailty_covariance_res, cumulative_hazards_res
-
-    def calculate_empirical_variance(self, estimators, mean):
-        x = np.array([np.power(estimators[i, :, :] - mean, 2)
-                      for i in range(self.model.n_simulations)])
-        # nans = np.sum(np.isnan(x)) #todo: consider to count only not nan attributes for var
-        sums = np.sum(x, where=~np.isnan(x), axis=0)
-        return sums / (self.model.n_simulations - 1)
 
     def analyze_statistical_results(self, empirical_run):
         axis = 0
@@ -252,9 +237,6 @@ class BiometricsRunner(Runner):
 
         return mean_beta_coefficients, mean_frailty_covariance, mean_cumulative_hazards, var_beta_coefficients, \
             var_frailty_covariance, var_cumulative_hazard
-
-    def print_summary(self) -> None:
-        self.analyze_statistical_results(empirical_run=True)
 
 
 class BiometricsMultiRunner(BiometricsRunner):
