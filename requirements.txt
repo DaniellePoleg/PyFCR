@@ -3,3 +3,4 @@ numpy
 pandas
 ninja
 cmake
+matplotlib
