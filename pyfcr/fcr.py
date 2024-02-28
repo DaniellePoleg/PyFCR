@@ -1,5 +1,5 @@
 
-# from AssafModel.Assafs import AssafDataModel, AssafRunner
+from .assaf import AssafDataModel, AssafRunner, AssafMultiRunner
 from .biometrics import BiometricsDataModel, BiometricsMultiRunner, BiometricsRunner
 from .config import Config, RunMode, FCRType
 
@@ -10,9 +10,10 @@ class FCR:
             self._model = BiometricsDataModel(config)
             self._runner = BiometricsMultiRunner(self._model) if config.run_type == RunMode.SIMULATION else \
                 BiometricsRunner(self._model)
-        # elif config.fcr_type == FCRType.ASSAF:
-        #     self._model = AssafDataModel(config)
-        #     self._runner = AssafRunner(self._model) #todo: complete if
+        elif config.fcr_type == FCRType.ASSAF:
+            self._model = AssafDataModel(config)
+            self._runner = AssafMultiRunner(self._model) if config.run_type == RunMode.SIMULATION else \
+                AssafRunner(self._model)
         else:
             assert 1==0 #todo: send error
 
