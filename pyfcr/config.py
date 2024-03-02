@@ -22,7 +22,7 @@ class Config:
 
     def __init__(self,
                  run_type: RunMode = RunMode.SIMULATION,
-                 fcr_type: FCRType = FCRType.BIOMETRICS,
+                 fcr_type: FCRType = FCRType.ASSAF,
                  n_members_in_cluster: int = 2,
                  n_competing_risks: int = 2,
                  n_clusters: int = 500,
@@ -31,10 +31,10 @@ class Config:
                  thresholds_cumulative_hazards: list = [0.1, 0.15, 0.20, 0.25],
                  calculate_event_types: bool = False,
                  n_simulations: int = 3,
-                 beta_coefficients: list = [0.5, 2.5],
+                 beta_coefficients: list = None,
                  frailty_mean: list = [0, 0],
                  frailty_covariance: list = [[1, 0.5], [0.5, 1.5]],
-                 censoring_method: Callable = lambda: np.random.uniform(0, 0.3, 1),
+                 censoring_method: Callable = lambda x: np.random.uniform(0, 0.3, x),
                  n_covariates: int = None,
                  data_path: Path = None):
         '''
@@ -68,7 +68,7 @@ class Config:
 
         if self.run_type == RunMode.SIMULATION:
             self.n_simulations = n_simulations
-            self.beta_coefficients = beta_coefficients
+            self.beta_coefficients = beta_coefficients if beta_coefficients else ([[[0.5],[0.5]],[[2.5],[2.5]]] if fcr_type==FCRType.ASSAF else [0.5, 2.5])
             self.frailty_mean = frailty_mean
             self.frailty_covariance = frailty_covariance
             self.censoring_method = censoring_method
