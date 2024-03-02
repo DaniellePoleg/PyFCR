@@ -5,7 +5,7 @@ import random
 from .fcr_base import FCRDataModel, Runner
 from .config import Config, RunMode
 from rpy2.robjects import Formula, IntVector
-from utilities import *
+from .utilities import *
 from ._estimators import *
 
 utils = importr('utils')
