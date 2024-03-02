@@ -126,7 +126,7 @@ class BiometricsRunner(Runner):
         def getter(param, i):
             return param[i, :].reshape(-1)
         df = pd.DataFrame(
-            columns=[f'cumulative_hazard_threshold_{j}' for i in range(1, self.model.n_threshold_cum_hazard + 1)])
+            columns=[f'cumulative_hazard_threshold_{i}' for i in range(1, self.model.n_threshold_cum_hazard + 1)])
         self.print_estimators(df, mean, standard_error, standard_deviation, getter)
 
 

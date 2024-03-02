@@ -74,10 +74,10 @@ class AssafRunner(Runner):
         return self.model.deltas.sum(axis=1)
 
     def calculate_frailty_covariance_estimators(self, args):
-        return m.calculate_frailty_covariance_estimators_assaf_c(*args)
+        return calculate_frailty_covariance_estimators_assaf_c(*args)
 
     def calculate_frailty_exponent_estimators(self, args):
-        return m.calculate_frailty_exponent_estimators_assaf_C(*args)
+        return calculate_frailty_exponent_estimators_assaf_C(*args)
 
     def get_beta_z(self):
         beta_z = np.zeros(shape=(self.model.n_clusters, self.model.n_members, self.model.n_competing_risks))

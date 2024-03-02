@@ -211,10 +211,11 @@ class Runner:
             df.loc[f'competing_risk_{i + 1}_SE'] = getter(standard_error, i)
             if standard_deviation is not None:
                 df.loc[f'competing_risk_{i + 1}_SD'] = getter(standard_deviation, i)
-        directory = "\\results"
+        home_directory = os.path.expanduser("~")
+        directory = os.path.join(home_directory, "pyfcr_results")
         os.makedirs(directory, exist_ok=True)
         file_name = df.columns[0].split('_')[0]
-        df.to_csv(f"{directory}\\{file_name}.csv")
+        df.to_csv(os.path.join(directory, f"{file_name}.csv"))
         print(df.round(4))
 
     def print_betas(self, mean, standard_error, standard_deviation) -> None:
@@ -234,8 +235,11 @@ class Runner:
         for key, value in data.items():
             df.loc[key] = [value[i][j] for i in range(self.model.n_competing_risks) for j in
                            range(self.model.n_competing_risks) if i <= j]
-        os.makedirs('results', exist_ok=True)
-        df.to_csv("\\results\\frailty_covariance.csv")
+
+        home_directory = os.path.expanduser("~")
+        directory = os.path.join(home_directory, "pyfcr_results")
+        os.makedirs(directory, exist_ok=True)
+        df.to_csv(os.path.join(directory, "frailty_covariance.csv"))
         print(df.round(4))
 
     def analyze_statistical_results(self, empirical_run=True, multi_estimators_df=None):
