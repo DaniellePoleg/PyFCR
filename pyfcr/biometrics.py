@@ -113,10 +113,50 @@ class BiometricsRunner(Runner):
 
     def get_estimators_dimensions(self, n_repeats):
         return [(n_repeats, self.model.n_competing_risks, self.model.n_covariates),
-                  (n_repeats, self.model.n_competing_risks, self.model.n_competing_risks),
-                  (n_repeats, self.model.n_competing_risks, self.model.n_threshold_cum_hazard)]
+                (n_repeats, self.model.n_competing_risks, self.model.n_competing_risks),
+                (n_repeats, self.model.n_competing_risks, self.model.n_threshold_cum_hazard)]
 
-    def analyze_statistical_results(self, empirical_run):
+    def print_estimators(self, df, mean, standard_error, standard_deviation, getter):
+        for i in range(0, self.model.n_competing_risks):
+            df.loc[f'competing_risk_{i + 1}_param'] = getter(mean, i)
+            df.loc[f'competing_risk_{i + 1}_SE'] = getter(standard_error, i)
+            if standard_deviation is not None:
+                df.loc[f'competing_risk_{i + 1}_SD'] = getter(standard_deviation, i)
+        print(df.round(4))
+
+    def print_betas(self, mean, standard_error, standard_deviation) -> None:
+        def getter(param, i):
+            return param[i, :].reshape(-1)
+
+        df = pd.DataFrame(columns=[f'beta_covariate{i}' for i in range(1, self.model.n_covariates + 1)])
+        self.print_estimators(df, mean, standard_error, standard_deviation, getter)
+
+    def print_cumulative_hazards(self, mean, standard_error, standard_deviation) -> None:
+        def getter(param, i):
+            return param[i, :].reshape(-1)
+
+        df = pd.DataFrame(
+            columns=[f'cumulative_hazard_threshold_{i}' for i in range(1, self.model.n_threshold_cum_hazard + 1)])
+        self.print_estimators(df, mean, standard_error, standard_deviation, getter)
+
+    def print_frailty_covariance(self, mean, standard_error, standard_deviation) -> None:
+        df = pd.DataFrame(columns=[f'frailty_covariance_comp_risk_{i}_comp_risk_{j}' for i in
+                                   range(1, self.model.n_competing_risks + 1) for j in
+                                   range(1, self.model.n_competing_risks + 1)
+                                   if i <= j])
+        data = {'param': mean, 'SE': standard_error}
+        if standard_deviation is not None:
+            data['SD'] = standard_deviation
+        for key, value in data.items():
+            df.loc[key] = [value[i][j] for i in range(self.model.n_competing_risks) for j in
+                           range(self.model.n_competing_risks) if i <= j]
+        print(df.round(4))
+
+    def analyze_statistical_results(self, empirical_run=True, multi_estimators_df=None):
+        mean_betas_vars = None
+        mean_sigmas_vars = None
+        mean_cums_vars = None
+
         axis = 0
         mean_beta_coefficients = self.beta_coefficients_res.mean(axis=axis)
         mean_frailty_covariance = self.frailty_covariance_res.mean(axis=axis)
@@ -124,38 +164,23 @@ class BiometricsRunner(Runner):
 
         if empirical_run:
             var_beta_coefficients = self.calculate_empirical_variance(self.beta_coefficients_res,
-                                                                 mean_beta_coefficients)
+                                                                      mean_beta_coefficients)
             var_frailty_covariance = self.calculate_empirical_variance(self.frailty_covariance_res,
-                                                                  mean_frailty_covariance)
+                                                                       mean_frailty_covariance)
             var_cumulative_hazard = self.calculate_empirical_variance(self.cumulative_hazards_res,
-                                                                 mean_cumulative_hazards)
-            columns = [[f'j{i}_param', f'j{i}_SE'] for i in range(1, self.model.n_competing_risks+1)]
-            columns = [item for sublist in columns for item in sublist]
+                                                                      mean_cumulative_hazards)
+            if multi_estimators_df is not None:
+                betas_vars, sigmas_vars, cums_vars = self.reshape_estimators_from_df(
+                    multi_estimators_df.iloc[:, 3:6],
+                    self.model.n_simulations)
+                mean_betas_vars = np.mean(betas_vars, axis=0)
+                mean_sigmas_vars = np.mean(sigmas_vars, axis=0)
+                mean_cums_vars = np.nanmean(cums_vars, axis=0)
 
-            df = pd.DataFrame(columns=columns)
-            # df.loc['betas'] = [[mean_beta_coefficients[i][0], var_beta_coefficients[i][0]] for i in range(self.model.n_competing_risks)]
-
-            df.loc['betas'] = [mean_beta_coefficients[0][0], var_beta_coefficients[0][0], mean_beta_coefficients[1][0],
-                              var_beta_coefficients[1][0]]
-            df.loc['frailty_variance'] = [mean_frailty_covariance[0][0], var_frailty_covariance[0][0], mean_frailty_covariance[1][1],
-                              var_frailty_covariance[1][1]]
-            df.loc['frailty_covariance'] = [mean_frailty_covariance[0][1], var_frailty_covariance[0][1], mean_frailty_covariance[1][0],
-                              var_frailty_covariance[1][0]]
-            df.loc['cumulativa_hazard_0'] = [mean_cumulative_hazards[0][0], var_cumulative_hazard[0][0], mean_cumulative_hazards[1][0],
-                              var_cumulative_hazard[1][0]]
-            df.loc['cumulativa_hazard_1'] = [mean_cumulative_hazards[0][1], var_cumulative_hazard[0][1], mean_cumulative_hazards[1][1],
-                              var_cumulative_hazard[1][1]]
-            df.loc['cumulativa_hazard_2'] = [mean_cumulative_hazards[0][2], var_cumulative_hazard[0][2], mean_cumulative_hazards[1][2],
-                              var_cumulative_hazard[1][2]]
-            df.loc['cumulativa_hazard_3'] = [mean_cumulative_hazards[0][3], var_cumulative_hazard[0][3], mean_cumulative_hazards[1][3],
-                              var_cumulative_hazard[1][3]]
-            print(df.round(4))
-            # print("mean_beta_coefficients: ", np.round(mean_beta_coefficients, 4))
-            # print("emp_var_beta_coefficients: ", np.round(var_beta_coefficients, 4))
-            # print("mean_frailty_covariance: ", np.round(mean_frailty_covariance, 4))
-            # print("emp_var_frailty_covariance: ", np.round(var_frailty_covariance, 4))
-            # print("mean_cumulative_hazards: ", np.round(mean_cumulative_hazards, 4))
-            # print("emp_var_cumulative_hazard: ", np.round(var_cumulative_hazard, 4))
+            pd.set_option('display.max_columns', None)
+            self.print_betas(mean_beta_coefficients, var_beta_coefficients, mean_betas_vars)
+            self.print_frailty_covariance(mean_frailty_covariance, var_frailty_covariance, mean_sigmas_vars)
+            self.print_cumulative_hazards(mean_cumulative_hazards, var_cumulative_hazard, mean_cums_vars)
 
         else:
             var_beta_coefficients = self.beta_coefficients_res.var(axis=axis)
@@ -169,11 +194,13 @@ class BiometricsRunner(Runner):
 class BiometricsMultiRunner(BiometricsRunner):
     def __init__(self, model):
         super().__init__(model)
-        self.multi_estimators_df = pd.DataFrame(columns=['betas', 'sigmas', 'cums_res', 'betas_vars', 'sigmas_vars', 'cums_vars'])
+        self.multi_estimators_df = pd.DataFrame(
+            columns=['betas', 'sigmas', 'cums_res', 'betas_vars', 'sigmas_vars', 'cums_vars'])
 
     def run(self):
-        cnt_columns_coverage_rates = 2 * (self.model.n_covariates*self.model.n_competing_risks + self.model.n_competing_risks * self.model.n_competing_risks +
-                                          self.model.n_competing_risks * self.model.n_threshold_cum_hazard)
+        cnt_columns_coverage_rates = 2 * (
+                    self.model.n_covariates * self.model.n_competing_risks + self.model.n_competing_risks * self.model.n_competing_risks +
+                    self.model.n_competing_risks * self.model.n_threshold_cum_hazard)
         coverage_rates_df = pd.DataFrame(columns=range(cnt_columns_coverage_rates))
         event_types_analysis = []
         for i in range(self.model.n_simulations):
@@ -189,14 +216,15 @@ class BiometricsMultiRunner(BiometricsRunner):
         self.beta_coefficients_res, self.frailty_covariance_res, self.cumulative_hazards_res = self.reshape_estimators_from_df(
             self.multi_estimators_df, self.model.n_simulations)
 
-    #todo: this can be static
+    # todo: this can be static
     def calculate_event_types_results(self, all_results):
         censoring_rate_1 = sum([int(i[0] == 0) for i in self.model.event_types])
         censoring_rate_2 = sum([int(i[1] == 0) for i in self.model.event_types])
         censoring = np.array(censoring_rate_1) + np.array(censoring_rate_2)
         event_type_1 = sum([int(i[0] == 1) + int(i[1] == 1) for i in self.model.event_types])
         event_type_2 = sum([int(i[0] == 2) + int(i[1] == 2) for i in self.model.event_types])
-        event_type_different = sum([(int(i[0] == 1 and i[1] == 2) or int(i[0] == 2 and i[1] == 1)) for i in self.model.event_types])
+        event_type_different = sum(
+            [(int(i[0] == 1 and i[1] == 2) or int(i[0] == 2 and i[1] == 1)) for i in self.model.event_types])
         event_type_both_1 = sum([int(i[0] == 1 and i[1] == 1) for i in self.model.event_types])
         event_type_both_2 = sum([int(i[0] == 2 and i[1] == 2) for i in self.model.event_types])
         all_results.append((censoring, event_type_1, event_type_2, event_type_different,
@@ -204,46 +232,4 @@ class BiometricsMultiRunner(BiometricsRunner):
         return all_results
 
     def print_summary(self) -> None:
-        super().print_summary()
-        self.calculate_bootstrap_variance()
-
-    def calculate_bootstrap_variance(self) -> None:
-        betas_vars, sigmas_vars, cums_vars = self.reshape_estimators_from_df(self.multi_estimators_df.iloc[:, 3:6],
-                                                                                    self.model.n_simulations)
-        mean_betas_vars = np.mean(betas_vars, axis=0)
-        mean_sigmas_vars = np.mean(sigmas_vars, axis=0)
-        mean_cums_vars = np.nanmean(cums_vars, axis=0)
-
-        df = pd.DataFrame(columns=['j1_param', 'j1_SE', 'j2_param', 'j2_SE'])
-        df.loc['betas_vars'] = [mean_betas_vars[0][0], 'X', mean_betas_vars[1][0], 'X']
-        df.loc['sigmas_vars'] = [mean_sigmas_vars[0][0], 'X', mean_sigmas_vars[1][1], 'X']
-        df.loc['covariance_vars'] = [mean_sigmas_vars[0][1], 'X', mean_sigmas_vars[1][0], 'X']
-        df.loc['cums_vars_0'] = [mean_cums_vars[0][0], 'X', mean_cums_vars[1][0], 'X']
-        df.loc['cums_vars_1'] = [mean_cums_vars[0][1], 'X', mean_cums_vars[1][1], 'X']
-        df.loc['cums_vars_2'] = [mean_cums_vars[0][2], 'X', mean_cums_vars[1][2], 'X']
-        df.loc['cums_vars_3'] = [mean_cums_vars[0][3], 'X', mean_cums_vars[1][3], 'X']
-        print(df.round(4))
-
-        # print("variance of betas from bootstrap: ", np.round(np.mean(betas_vars, axis=0), 4))
-        # print("variance of sigmas from bootstrap: ", np.round(np.mean(sigmas_vars, axis=0), 4))
-        # print("variance of cumulative hazards from bootstrap: ", np.round(np.nanmean(cums_vars, axis=0), 4))
-
-        # print("results for run of n clusters:", self.model.n_clusters)
-        # if event_types:
-        #     print("average:", [np.round(np.mean(value), 2) for value in event_types])
-        #     print("SD:", [np.round(np.std(value), 2) for value in event_types])
-
-        # todo: add try and catch if results dir does not exist
-        # coverage_rates_df.to_csv("results\\conf_intervals.csv")
-
-        # todo: parse dataframe to txt
-        # np.savetxt("results\\beta_coefficient_estimators.csv", betas.reshape(-1), delimiter=",")
-        # np.savetxt("results\\frailty_covariance_estimators.csv", sigmas.reshape(-1), delimiter=",")
-        # np.savetxt("results\\cumulative_hazard_estimators.csv", cums_res.reshape(-1), delimiter=",")
-        # np.savetxt("results\\beta_coefficient_var_boot.csv", betas_vars.reshape(-1), delimiter=",")
-        # np.savetxt("results\\frailty_covariance_var_boot.csv", sigmas_vars.reshape(-1), delimiter=",")
-        # np.savetxt("results\\cumulative_hazard_var_boot.csv", cums_vars.reshape(-1), delimiter=",")
-        # np.loadtxt("results\\deltas.csv", delimiter=',').reshape(500, 2, 2)
-        # np.loadtxt("results\\Z.csv", delimiter=',').reshape(500, 2, 1)
-        # np.loadtxt("results\\Z.csv", delimiter=',').reshape(500, 2)
-        # np.savetxt("data\\deltas.csv", self.model.deltas.reshape(-1), delimiter=",")
+        self.analyze_statistical_results(empirical_run=True, multi_estimators_df=self.multi_estimators_df)
