@@ -1,35 +1,17 @@
-import math
 import random
-import os
 
 from .fcr_base import *
 from .utilities import *
 from ._estimators import *
-from .config import Config
 
 
 class BiometricsDataModel(FCRDataModel):
     # todo: add a function to validate data
-    def __init__(self, config: Config):
-        super().__init__(config)
-        if self.run_type == RunMode.SIMULATION:
-            if len(self.beta_coefficients.shape) > 1:
-                self.n_covariates = self.beta_coefficients.shape[1]
-                assert self.beta_coefficients.shape[0] == self.n_competing_risks
-            else:
-                assert self.beta_coefficients.shape[0] == self.n_competing_risks
-            self.deltas = np.empty(shape=(self.n_clusters, self.n_members, self.n_competing_risks), dtype=bool)
-            self.event_types = np.empty(shape=(self.n_clusters, self.n_members), dtype=int)
-            self.X = np.empty(shape=(self.n_clusters, self.n_members), dtype=float)
-            self.Z = np.empty((self.n_clusters, self.n_members, self.n_covariates), dtype=float)
+    def get_n_covariates_from_beta(self):
+        return 1
 
-            assert len(self.frailty_mean) == self.n_competing_risks
-            assert len(self.frailty_covariance) == self.n_competing_risks
-
-    def read_data(self, data_path):
-        self.deltas = np.loadtxt(os.path.join(data_path, "deltas.csv"), delimiter=',').reshape((self.n_clusters, self.n_members, self.n_competing_risks))
-        self.Z = np.loadtxt(os.path.join(data_path, "Z.csv"), delimiter=',').reshape((self.n_clusters, self.n_members, self.n_covariates))
-        self.X = np.loadtxt(os.path.join(data_path, "X.csv"), delimiter=',').reshape((self.n_clusters, self.n_members))
+    def get_z_dimension(self):
+        return (self.n_clusters, self.n_members, self.n_covariates)
 
     def simulate_data(self):
         random.seed(10)
@@ -50,7 +32,7 @@ class BiometricsDataModel(FCRDataModel):
         delta = np.random.multinomial(n=1, pvals=[gammas[i] / gamma for i in range(self.n_competing_risks)], size=1)
         event_type = int(np.where(delta[0] == 1)[0]) + 1
         if self.censoring_method:
-            censoring_time = self.censoring_method()
+            censoring_time = self.censoring_method(1)
             time = min(T_0, censoring_time)
             if time == censoring_time:  # if censored
                 event_type = 0
@@ -58,16 +40,6 @@ class BiometricsDataModel(FCRDataModel):
         else:
             time = T_0
         return event_type, delta, time, covariates
-
-    def get_covariates_single_simulation(self):
-        covariates = np.empty(shape=(self.n_covariates, 1), dtype=float)
-        if self.uniform:
-            for i in range(self.n_covariates):
-                covariates[i] = np.random.uniform(0, 1)
-        else:
-            for i in range(self.n_covariates):
-                covariates[i] = np.random.randint(0, 2)
-        return covariates
 
     def get_gammas_single_simulation(self, covariates, frailty_variates):
         gammas = np.empty(shape=self.n_competing_risks, dtype=float)
@@ -84,79 +56,39 @@ class BiometricsRunner(Runner):
     def __init__(self, dataModel):
         super().__init__(dataModel)
         self.model.__class__ = BiometricsDataModel
-        self.frailty_exponent = np.ones((self.model.n_clusters, self.model.n_competing_risks), dtype=float)
-        self.beta_coefficients_estimators = np.zeros((self.model.n_covariates, self.model.n_competing_risks, 1), dtype=float)
-        self.frailty_covariance_estimators = np.diag(np.ones(self.model.n_competing_risks))
-        self.cumulative_hazards_estimators = []
-        self.estimators_df = pd.DataFrame(columns=['betas', 'frailty_covariance', 'cumulative_hazards'])
+        self.beta_coefficients_estimators = np.zeros((self.model.n_covariates, self.model.n_competing_risks, 1),
+                                                     dtype=float)
 
-    def bootstrap_run(self):
-        for boot in range(self.model.n_bootstrap):
-            random_cox_weights = np.random.exponential(size=(self.model.n_clusters,))
-            self.random_cox_weights = random_cox_weights / random_cox_weights.mean()
-            self.single_run()
-            self.estimators_df.loc[boot] = [self.beta_coefficients_estimators, self.frailty_covariance_estimators,
-                                       self.get_cumulative_hazard_estimators()
-                                       ]
-        self.beta_coefficients_res, self.frailty_covariance_res, self.cumulative_hazards_res = self.reshape_estimators_from_df(
-            self.estimators_df, self.model.n_bootstrap)
+    def get_delta_sums(self):
+        return np.vstack([self.model.deltas[:, :, i] for i in range(self.model.n_competing_risks)])
 
-    def single_run(self):
-        iteration_cnt = 0
-        convergence = 1
-        while (convergence > self.convergence_threshold) & (iteration_cnt < self.max_iterations):
-            old_betas = self.beta_coefficients_estimators
-            old_frailty_covariance = self.frailty_covariance_estimators
-            try:
-                self.beta_coefficients_estimators, hazard_at_event, self.cumulative_hazards_estimators = \
-                    self.get_cox_estimators(self.frailty_exponent, cox_weights=self.random_cox_weights)
-            except Exception as e:
-                print("Failed in get_cox_estimators in run_single_estimation, The error is: ", e)
-            self.frailty_covariance_estimators = self.get_frailty_covariance_estimators(hazard_at_event)
-            self.frailty_exponent = self.get_frailty_exponent_estimators(hazard_at_event)
-            convergence = get_estimators_convergence(old_betas, self.beta_coefficients_estimators,
-                                                     old_frailty_covariance, self.frailty_covariance_estimators)
-            if math.isnan(convergence):
-                break
-            iteration_cnt += 1
+    def calculate_frailty_covariance_estimators(self, args):
+        return calculate_frailty_covariance_estimators_biometrics_c(*args)
 
-    def get_estimators_arguments(self):
-        rowSums = np.vstack([self.model.deltas[:, :, i] for i in range(self.model.n_competing_risks)])
-        gauss_hermite_points, gauss_hermite_weights = multi_gauss_hermite_calculation(
-            sigma=self.frailty_covariance_estimators, pts=self.points_for_gauss_hermite,
-            wts=self.weights_for_gauss_hermite)
-        beta_z = self.get_beta_z(self.beta_coefficients_estimators)
-        return rowSums, gauss_hermite_points, gauss_hermite_weights, beta_z
+    def calculate_frailty_exponent_estimators(self, args):
+        return calculate_frailty_exponent_estimators_biometrics_c(*args)
 
-    def get_frailty_covariance_estimators(self, hazard_at_event):
-        rowSums, gauss_hermite_points, gauss_hermite_weights, beta_z = self.get_estimators_arguments()
-        return calculate_frailty_covariance_estimators_biometrics_c(rowSums, gauss_hermite_points, gauss_hermite_weights, hazard_at_event, beta_z, self.random_cox_weights)
-
-    def get_frailty_exponent_estimators(self, hazard_at_event):
-        rowSums, gauss_hermite_points, gauss_hermite_weights, beta_z = self.get_estimators_arguments()
-        return calculate_frailty_exponent_estimators_biometrics_c(rowSums, gauss_hermite_points,
-                                                                     gauss_hermite_weights, hazard_at_event, beta_z)
-
-    def get_beta_z(self, beta_hat):
+    def get_beta_z(self):
         beta_z = np.empty(shape=(self.model.n_clusters, self.model.n_members, self.model.n_competing_risks),
                           dtype=float)
         for j in range(self.model.n_members):
             for i in range(self.model.n_competing_risks):
-                beta_z[:, j, i] = np.dot(beta_hat[i], self.model.Z[:, j, :].T)
+                beta_z[:, j, i] = np.dot(self.beta_coefficients_estimators[i], self.model.Z[:, j, :].T)
         return np.concatenate([beta_z[:, :, i] for i in range(self.model.n_competing_risks)])
 
-    def get_cox_estimators(self, frailty_exponent, cox_weights):
+    def get_cox_estimators(self):
         beta_coefficients = np.empty(shape=(self.model.n_competing_risks, self.model.n_covariates), dtype=float)
         hazard_at_event = np.empty(shape=(self.model.n_clusters, self.model.n_members, self.model.n_competing_risks),
                                    dtype=float)
         cumulative_hazards = []
 
-        frailty_exponent = np.repeat(frailty_exponent, repeats=self.model.n_members, axis=0)
-        cox_weights = np.repeat(cox_weights, self.model.n_members)
+        frailty_exponent = np.repeat(self.frailty_exponent, repeats=self.model.n_members, axis=0)
+        cox_weights = np.repeat(self.random_cox_weights, self.model.n_members)
         X = self.model.X.reshape(-1)
 
         for j in range(self.model.n_competing_risks):
-            formula, data = self.get_survival_formula_and_data(X, frailty_exponent, j)
+            cur_delta = self.model.deltas[:, :, j].reshape(-1)
+            formula, data = self.get_survival_formula_and_data(X, cur_delta, frailty_exponent, j)
             cur_beta_coefficients, hazard, times = parse_cox_estimators(formula, data, cox_weights)
             beta_coefficients[j, :] = cur_beta_coefficients
             cumulative_hazard = self.get_cumulative_hazards(hazard, cur_beta_coefficients)
@@ -166,13 +98,8 @@ class BiometricsRunner(Runner):
         hazard_at_event = np.concatenate([hazard_at_event[:, :, i] for i in range(self.model.n_competing_risks)])
         return beta_coefficients, hazard_at_event, cumulative_hazards
 
-    def get_cumulative_hazards(self, hazard, beta_coefficients):
-        if self.model.uniform:
-            z_mean = self.model.Z.reshape(-1, self.model.n_covariates).T.mean(axis=1)
-            cumulative_hazard = list(np.cumsum(hazard / np.exp(np.dot(beta_coefficients, z_mean))))
-        else:
-            cumulative_hazard = list(np.cumsum(hazard))
-        return cumulative_hazard
+    def get_z_mean(self):
+        return self.model.Z.reshape(-1, self.model.n_covariates).T.mean(axis=1)
 
     def get_cumulative_hazard_estimators(self):
         cumulative_hazards_at_points = np.empty(

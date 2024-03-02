@@ -1,3 +1,6 @@
+import os
+import math
+
 from .utilities import *
 from .config import Config, RunMode
 from rpy2.robjects import Formula, IntVector, FloatVector
@@ -29,16 +32,51 @@ class FCRDataModel:
             self.n_simulations = config.n_simulations
             self.calculate_event_types = config.calculate_event_types
             self.beta_coefficients = np.array(config.beta_coefficients)
+            if len(self.beta_coefficients.shape) > 1:
+                self.n_covariates = self.beta_coefficients.shape[self.get_n_covariates_from_beta()]
+                assert self.beta_coefficients.shape[0] == self.n_competing_risks
+            else:
+                assert self.beta_coefficients.shape[0] == self.n_competing_risks
+
+            assert len(self.frailty_mean) == self.n_competing_risks
+            assert len(self.frailty_covariance) == self.n_competing_risks
+
+            self.deltas = np.empty(shape=(self.n_clusters, self.n_members, self.n_competing_risks), dtype=bool)
+            self.event_types = np.empty(shape=(self.n_clusters, self.n_members), dtype=int)
+            self.X = np.empty(shape=(self.n_clusters, self.n_members), dtype=float)
+            self.Z = np.empty(self.get_z_dimension(), dtype=float)
+
 
         elif self.run_type == RunMode.ANALYSIS:
             self.n_covariates = config.n_covariates
             self.read_data(config.data_path)
 
-    def read_data(self, data_path):
+    def get_n_covariates_from_beta(self):
         raise NotImplementedError
+
+    def get_z_dimension(self):
+        raise NotImplementedError
+
+
+    def read_data(self, data_path):
+        self.deltas = np.loadtxt(os.path.join(data_path, "deltas.csv"), delimiter=',').reshape(
+            (self.n_clusters, self.n_members, self.n_competing_risks))
+        self.Z = np.loadtxt(os.path.join(data_path, "Z.csv"), delimiter=',').reshape(
+            self.get_z_dimension())
+        self.X = np.loadtxt(os.path.join(data_path, "X.csv"), delimiter=',').reshape((self.n_clusters, self.n_members))
 
     def simulate_data(self):
         raise NotImplementedError
+
+    def get_covariates_single_simulation(self):
+        covariates = np.empty(shape=(self.n_covariates, 1), dtype=float)
+        if self.uniform:
+            for i in range(self.n_covariates):
+                covariates[i] = np.random.uniform(0, 1)
+        else:
+            for i in range(self.n_covariates):
+                covariates[i] = np.random.randint(0, 2)
+        return covariates
 
     def plot_event_occurence(self):
         plot_event_occurence(self.X, self.event_types)
@@ -52,6 +90,10 @@ class Runner:
         self.points_for_gauss_hermite, self.weights_for_gauss_hermite = get_pts_wts(
             competing_risks=self.model.n_competing_risks,
             gh=gauss_hermite_calculation(N_P), prune=0.2)
+        self.frailty_exponent = np.ones((self.model.n_clusters, self.model.n_competing_risks), dtype=float)
+        self.frailty_covariance_estimators = np.diag(np.ones(self.model.n_competing_risks))
+        self.cumulative_hazards_estimators = []
+        self.estimators_df = pd.DataFrame(columns=['betas', 'frailty_covariance', 'cumulative_hazards'])
         self.beta_coefficients_res = None
         self.frailty_covariance_res = None
         self.cumulative_hazards_res = None
@@ -61,36 +103,97 @@ class Runner:
         self.bootstrap_run()
 
     def bootstrap_run(self):
-        raise NotImplementedError
+        for boot in range(self.model.n_bootstrap):
+            random_cox_weights = np.random.exponential(size=(self.model.n_clusters,))
+            self.random_cox_weights = random_cox_weights / random_cox_weights.mean()
+            self.single_run()
+            self.estimators_df.loc[boot] = [self.beta_coefficients_estimators, self.frailty_covariance_estimators,
+                                       self.get_cumulative_hazard_estimators()
+                                       ]
+        self.beta_coefficients_res, self.frailty_covariance_res, self.cumulative_hazards_res = self.reshape_estimators_from_df(
+            self.estimators_df, self.model.n_bootstrap)
+
+    def single_run(self):
+        iteration_cnt = 0
+        convergence = 1
+        while (convergence > self.convergence_threshold) & (iteration_cnt < self.max_iterations):
+            old_betas = self.beta_coefficients_estimators
+            old_frailty_covariance = self.frailty_covariance_estimators
+            try:
+                self.beta_coefficients_estimators, hazard_at_event, self.cumulative_hazards_estimators = \
+                    self.get_cox_estimators()
+            except Exception as e:
+                print("Failed in get_cox_estimators in run_single_estimation, The error is: ", e)
+            self.get_frailty_estimators(hazard_at_event)
+            convergence = get_estimators_convergence(old_betas, self.beta_coefficients_estimators,
+                                                     old_frailty_covariance, self.frailty_covariance_estimators)
+            if math.isnan(convergence):
+                break
+            iteration_cnt += 1
 
     def get_beta_z(self):
         raise NotImplementedError
 
-    def get_survival_formula_and_data(self, X, frailty_exponent, cur_competing_risk):
-        cur_delta = self.model.deltas[:, :, cur_competing_risk].reshape(-1)
+    def get_frailty_estimators_arguments(self):
+        delta_sums = self.get_delta_sums()
+        gauss_hermite_points, gauss_hermite_weights = multi_gauss_hermite_calculation(
+            sigma=self.frailty_covariance_estimators, pts=self.points_for_gauss_hermite,
+            wts=self.weights_for_gauss_hermite)
+        beta_z = self.get_beta_z()
+        return delta_sums, gauss_hermite_points, gauss_hermite_weights, beta_z
+
+    def calculate_frailty_covariance_estimators(self, args):
+        raise NotImplementedError
+
+    def calculate_frailty_exponent_estimators(self, args):
+        raise NotImplementedError
+
+    def get_frailty_estimators(self, hazard_at_event):
+        rowSums, gauss_hermite_points, gauss_hermite_weights, beta_z = self.get_frailty_estimators_arguments()
+        self.frailty_covariance_estimators = self.calculate_frailty_covariance_estimators([rowSums, gauss_hermite_points, gauss_hermite_weights, hazard_at_event, beta_z, self.random_cox_weights])
+        self.frailty_exponent = self.calculate_frailty_exponent_estimators([rowSums, gauss_hermite_points,
+                                                                     gauss_hermite_weights, hazard_at_event, beta_z])
+
+    def get_delta_sums(self):
+        return NotImplementedError
+
+    def get_survival_formula_and_data(self, X, cur_delta, frailty_exponent, cur_competing_risk):
         formula_str = "srv ~"
-        for i in range(self.model.n_covariates):
-            formula_str += " + Z" + str(i)
+        for z in range(self.model.n_covariates):
+            formula_str += " + Z" + str(z)
         formula_str += "+ offset(frailty)"
         formula = Formula(formula_str)
-        dataframe = {'X': FloatVector(X), 'delta': IntVector(cur_delta)}
-        for i in range(self.model.n_covariates):
-            cur_Z = FloatVector(self.model.Z[:, :, i].reshape(-1))
-            cur_Z_name = 'Z' + str(i)
-            formula.environment[cur_Z_name] = cur_Z
-            dataframe[cur_Z_name] = cur_Z
 
+        dataframe = {'X': FloatVector(X), 'delta': IntVector(cur_delta)}
         srv = survival.Surv(time=FloatVector(X), event=IntVector(cur_delta))
         formula.environment['srv'] = srv
 
         frailty = FloatVector(np.log(frailty_exponent[:, cur_competing_risk]))
         formula.environment['frailty'] = frailty
+
+        return self.parse_covariates_fmla(formula, dataframe)
+
+    def parse_covariates_fmla(self, formula, dataframe):
+        for i in range(self.model.n_covariates):
+            cur_Z = FloatVector(self.model.Z[:, :, i].reshape(-1))
+            cur_Z_name = 'Z' + str(i)
+            formula.environment[cur_Z_name] = cur_Z
+            dataframe[cur_Z_name] = cur_Z
         return formula, dataframe
 
+
     def get_cumulative_hazards(self, hazard, beta_coefficients):
+        if self.model.uniform:
+            z_mean = self.get_z_mean()
+            cumulative_hazard = list(np.cumsum(hazard / np.exp(np.dot(beta_coefficients, z_mean))))
+        else:
+            cumulative_hazard = list(np.cumsum(hazard))
+        return cumulative_hazard
+
+    def get_z_mean(self):
         raise NotImplementedError
 
-    def get_cox_estimators(self, frailty_exponent, cox_weights):
+    def get_cox_estimators(self):
         raise NotImplementedError
 
     def get_cumulative_hazard_estimators(self):
@@ -101,6 +204,7 @@ class Runner:
                       for i in range(self.model.n_simulations)])
         sums = np.sum(x, where=~np.isnan(x), axis=0)
         return sums / (self.model.n_simulations - 1)
+
 
     def get_multiple_confidence_intervals(self):
         a = calculate_conf_interval(self.beta_coefficients_res, self.model.n_competing_risks)
@@ -116,7 +220,7 @@ class Runner:
         cumulative_hazards_res = np.vstack(estimators_df.iloc[:, 2]).reshape(shapes[2])
         return beta_coefficients_res, frailty_covariance_res, cumulative_hazards_res
 
-    def get_estimators_dimensions(self, n_repeats: int) -> list:
+    def get_estimators_dimensions(self, n_repeats: int) -> None:
         raise NotImplementedError
 
     def analyze_statistical_results(self, empirical_run: bool) -> None:

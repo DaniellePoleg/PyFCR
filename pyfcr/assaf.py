@@ -1,10 +1,6 @@
-import math
-import os
 import random
 
 from .fcr_base import FCRDataModel, Runner
-from .config import Config, RunMode
-from rpy2.robjects import Formula, IntVector
 from .utilities import *
 from ._estimators import *
 
@@ -16,153 +12,78 @@ stats = importr('stats')
 
 class AssafDataModel(FCRDataModel):
     # todo: add a function to validate data
-    def __init__(self, config: Config):
-        super().__init__(config)
-        if self.run_type == RunMode.SIMULATION:
-            if len(self.beta_coefficients.shape) > 1:
-                self.n_covariates = self.beta_coefficients.shape[2]
-                assert self.beta_coefficients.shape[0] == self.n_competing_risks
-            else:
-                assert self.beta_coefficients.shape[0] == self.n_competing_risks
+    def get_n_covariates_from_beta(self):
+        return 2
 
-            assert len(self.frailty_mean) == self.n_competing_risks
-            assert len(self.frailty_covariance) == self.n_competing_risks
-
-            self.deltas = np.empty(shape=(self.n_clusters, self.n_members, self.n_competing_risks), dtype=bool)
-            self.event_types = np.empty(shape=(self.n_clusters, self.n_members), dtype=int)
-            self.X = np.empty(shape=(self.n_clusters, self.n_members), dtype=float)
-            self.Z = np.empty((self.n_clusters, 1, self.n_covariates), dtype=float)
-
-    def read_data(self, data_path):
-        self.deltas = np.loadtxt(os.path.join(data_path, "deltas.csv"), delimiter=',').reshape(
-            (self.n_clusters, self.n_members, self.n_competing_risks))
-        self.Z = np.loadtxt(os.path.join(data_path, "Z.csv"), delimiter=',').reshape(
-            (self.n_clusters, 1, self.n_covariates))
-        self.X = np.loadtxt(os.path.join(data_path, "X.csv"), delimiter=',').reshape((self.n_clusters, self.n_members))
+    def get_z_dimension(self):
+        return (self.n_clusters, 1, self.n_covariates)
 
     def simulate_data(self):
         random.seed(10)
         for k in range(self.n_clusters):
             frailty_variates = np.random.multivariate_normal(self.frailty_mean, self.frailty_covariance)
-            covariates = np.empty(shape=(self.n_covariates, 1), dtype=float)
-            if self.uniform:
-                for i in range(self.n_covariates):
-                    covariates[i] = np.random.uniform(0, 1)
-            else:
-                for i in range(self.n_covariates):
-                    covariates[i] = np.random.randint(0, 2)
-
-            gammas = np.zeros(shape=(self.n_competing_risks, self.n_members))
-            for j in range(self.n_competing_risks):
-                for i in range(self.n_members):
-                    # if n_covariates == 1:
-                    beta_Z = np.dot(self.beta_coefficients[j, i], covariates)  # todo: calc for each member
-                    # todo: add option for >1 covariates
-                    # else:
-                    #     beta_Z = np.dot(beta_coefficients[:, i], covariates)
-                    gammas[j, i] = np.exp(beta_Z + frailty_variates[j])  # todo: maybe frailty is also for each member i
-
-            x = np.zeros(shape=(self.n_members, self.n_competing_risks))
-            T_0 = np.zeros(shape=(self.n_members))
-            for i in range(self.n_members):
-                gamma = gammas[:, i].sum()
-                T_0[i] = np.random.exponential(1 / gamma, 1)
-                # we draw an single value from the probability, and take the index of the value that is not 0. see documentation of multinomial
-                x[i, :] = np.random.multinomial(n=1,
-                                                pvals=[gammas[j, i] / gamma for j in range(self.n_competing_risks)],
-                                                size=1)
-            J = np.zeros(self.n_members)
-            for i in range(self.n_members):
-                J[i] = int(np.where(x[i] == 1)[0]) + 1
-
-            if self.censoring_method:
-                censoring_time = self.censoring_method(self.n_members)
-                t = [min(T_0[i], censoring_time[i]) for i in range(self.n_members)]
-                delta = [int(t[i] == censoring_time[i]) for i in range(self.n_members)]  # 1 if censored
-                for i in range(self.n_members):
-                    if delta[i] == 1:
-                        J[i] = 0
-                        x[i] = [0] * self.n_competing_risks
-            else:
-                t = T_0
-
-            self.event_types[k] = J
+            event_type, x, time, covariates = self.simulate_data_single_cluster(frailty_variates)
+            self.event_types[k] = event_type
             self.deltas[k] = x
-            self.X[k] = t
+            self.X[k] = time
             self.Z[k, :] = covariates.reshape(-1)
+
+    def simulate_data_single_cluster(self, frailty_variates):
+        covariates = self.get_covariates_single_simulation()
+        gammas = self.get_gammas_single_simulation(covariates, frailty_variates)
+        delta = np.zeros(shape=(self.n_members, self.n_competing_risks))
+        T_0 = np.zeros(shape=(self.n_members))
+        event_type = np.zeros(self.n_members)
+        for i in range(self.n_members):
+            gamma = gammas[:, i].sum()
+            T_0[i] = np.random.exponential(1 / gamma, 1)
+            delta[i, :] = np.random.multinomial(n=1,
+                                            pvals=[gammas[j, i] / gamma for j in range(self.n_competing_risks)],
+                                            size=1)
+            event_type[i] = int(np.where(delta[i] == 1)[0]) + 1
+
+        if self.censoring_method:
+            censoring_time = self.censoring_method(self.n_members)
+            time = [min(T_0[i], censoring_time[i]) for i in range(self.n_members)]
+            for i in range(self.n_members):
+                if time[i] == censoring_time[i]:
+                    event_type[i] = 0
+                    delta[i] = [0] * self.n_competing_risks
+        else:
+            time = T_0
+        return event_type, delta, time, covariates
+
+#todo: check covariates > 1
+    def get_gammas_single_simulation(self, covariates, frailty_variates):
+        gammas = np.zeros(shape=(self.n_competing_risks, self.n_members))
+        for j in range(self.n_competing_risks):
+            for i in range(self.n_members):
+                # if n_covariates == 1:
+                beta_Z = np.dot(self.beta_coefficients[j, i], covariates)  # todo: calc for each member
+                # todo: add option for >1 covariates
+                # else:
+                #     beta_Z = np.dot(beta_coefficients[:, i], covariates)
+                gammas[j, i] = np.exp(beta_Z + frailty_variates[j])  # todo: maybe frailty is also for each member i
+        return gammas
 
 
 class AssafRunner(Runner):
     def __init__(self, dataModel):
         super().__init__(dataModel)
         self.model.__class__ = AssafDataModel
-        self.frailty_exponent = np.ones((self.model.n_clusters, self.model.n_competing_risks), dtype=float)
-        self.beta_coefficients_estimators = np.zeros(
-            (self.model.n_competing_risks, self.model.n_members, self.model.n_covariates), dtype=float)
-        self.frailty_covariance_estimators = np.diag(np.ones(self.model.n_competing_risks))
-        self.cumulative_hazards_estimators = []
-        self.estimators_df = pd.DataFrame(columns=['betas', 'frailty_covariance', 'cumulative_hazards'])
+        self.beta_coefficients_estimators = np.zeros((self.model.n_covariates, self.model.n_competing_risks, self.model.n_members),
+                                                     dtype=float)
 
-    def bootstrap_run(self):
-        for boot in range(self.model.n_bootstrap):
-            random_cox_weights = np.random.exponential(size=(self.model.n_clusters,))
-            self.random_cox_weights = random_cox_weights / random_cox_weights.mean()
-            self.single_run()
-            self.estimators_df.loc[boot] = [self.beta_coefficients_estimators, self.frailty_covariance_estimators,
-                                            self.get_cumulative_hazard_estimators()
-                                            ]
-        self.beta_coefficients_res, self.frailty_covariance_res, self.cumulative_hazards_res = self.reshape_estimators_from_df(
-            self.estimators_df, self.model.n_bootstrap)
+    def get_delta_sums(self):
+        return self.model.deltas.sum(axis=1)
 
-    def q_single_observation(self, i):  # runs on single observation i
-        beta_coefficients = np.ndarray(shape=(self.model.n_competing_risks, self.model.n_covariates))
-        cumulative_hazards = []
-        hazard_at_event = np.ndarray(shape=(0,))
+    def calculate_frailty_covariance_estimators(self, args):
+        return calculate_frailty_covariance_estimators_assaf_c(*args)
 
-        for j in range(self.model.n_competing_risks):  # for j comp risk
-            cur_delta = self.model.deltas[:, i, j]
-            cur_x = self.model.X[:, i]
-            frailty = FloatVector(np.log(self.frailty_exponent[:, j]))
-            srv = survival.Surv(time=FloatVector(cur_x), event=IntVector(cur_delta))
-            fmla_str = "srv ~ Z0"
-            for z in range(1, self.model.n_covariates):
-                fmla_str += " + Z" + str(z)
-            fmla_str += "+ offset(frailty)"
-            fmla = Formula(fmla_str)
-            fmla.environment['srv'] = srv
-            dataframe = {'X': FloatVector(cur_x), 'delta': IntVector(cur_delta)}
-            for k in range(self.model.n_covariates):
-                cur_Z = FloatVector(self.model.Z[:, :, k].reshape(-1))
-                cur_Z_name = 'Z' + str(k)
-                fmla.environment[cur_Z_name] = cur_Z
-                dataframe[cur_Z_name] = cur_Z
-            fmla.environment['frailty'] = frailty
-            try:
-                cox_res = survival.coxph(fmla, data=DataFrame(dataframe),
-                                         weights=FloatVector(self.random_cox_weights, ),
-                                         ties="breslow")  # todo: catch here
+    def calculate_frailty_exponent_estimators(self, args):
+        return calculate_frailty_exponent_estimators_assaf_C(*args)
 
-            except:
-                print("failed at run_cox_comp_risk")
-                return beta_coefficients, hazard_at_event, cumulative_hazard
-            cox_fit_obj = survival.coxph_detail(cox_res)
-            # cur_beta_coefficients = cox_res[0][0]
-            cur_beta_coefficients = list(cox_res[0])
-            beta_coefficients[j, :] = cur_beta_coefficients
-            hazard = cox_fit_obj[4]
-            times = cox_fit_obj[0]
-            if self.model.uniform:
-                z_mean = self.model.Z.mean(axis=0).T
-                cumulative_hazard = list(np.cumsum(hazard / np.exp(np.dot(cur_beta_coefficients, z_mean))))
-            else:
-                cumulative_hazard = list(np.cumsum(hazard))
-            step_function = stats.stepfun(x=FloatVector(times), y=FloatVector([0] + cumulative_hazard))
-            temp = numpy2ri.rpy2py(step_function(FloatVector(cur_x)))
-            hazard_at_event = np.concatenate([hazard_at_event, temp])
-            cumulative_hazards.append(pd.DataFrame({'x': times, 'y': cumulative_hazard}))
-        return beta_coefficients, hazard_at_event, cumulative_hazards
-
-    def run_multiple_observations(self):
+    def get_cox_estimators(self):
         beta_coefficients_estimators = np.ndarray(
             shape=(self.model.n_competing_risks, self.model.n_members, self.model.n_covariates))
         cumulative_hazards_estimators = []
@@ -178,41 +99,24 @@ class AssafRunner(Runner):
             cumulative_hazards_estimators.append(cur_cumulative_hazard)
         return beta_coefficients_estimators, hazard_at_event, cumulative_hazards_estimators
 
-    def single_run(self):
-        iteration_cnt = 0
-        convergence = 1
-        while (convergence > self.convergence_threshold) & (iteration_cnt < self.max_iterations):
-            old_betas = self.beta_coefficients_estimators
-            old_frailty_covariance = self.frailty_covariance_estimators
-            try:
-                self.beta_coefficients_estimators, hazard_at_event_df, self.cumulative_hazards_estimators = self.run_multiple_observations()
-            except Exception as e:
-                print("Failed in get_cox_estimators in run_single_estimation, The error is: ", e)
-            beta_Z = self.get_beta_z()
-            gauss_hermite_points, gauss_hermite_weights = multi_gauss_hermite_calculation(
-                sigma=self.frailty_covariance_estimators, pts=self.points_for_gauss_hermite,
-                wts=self.weights_for_gauss_hermite)
-            delta_sums = self.model.deltas.sum(axis=1)
-            self.frailty_covariance_estimators = calculate_frailty_covariance_estimators_assaf_c(delta_sums,
-                                                                                                   gauss_hermite_points,
-                                                                                                   gauss_hermite_weights,
-                                                                                                   hazard_at_event_df,
-                                                                                                   beta_Z,
-                                                                                                   self.random_cox_weights)
+    def q_single_observation(self, i):  # runs on single observation i
+        beta_coefficients = np.ndarray(shape=(self.model.n_competing_risks, self.model.n_covariates))
+        cumulative_hazards = []
+        hazard_at_event = np.ndarray(shape=(0,))
 
-            self.frailty_exponent = calculate_frailty_exponent_estimators_assaf_C(delta_sums,
-                                                                                    gauss_hermite_points,
-                                                                                    gauss_hermite_weights,
-                                                                                    hazard_at_event_df,
-                                                                                    beta_Z,
-                                                                                    )
+        for j in range(self.model.n_competing_risks):  # for j comp risk
+            cur_delta = self.model.deltas[:, i, j]
+            cur_x = self.model.X[:, i]
+            formula, dataframe = self.get_survival_formula_and_data(cur_x, cur_delta, self.frailty_exponent, j)
+            cur_beta_coefficients, hazard, times = parse_cox_estimators(formula, dataframe, self.random_cox_weights)
+            beta_coefficients[j, :] = cur_beta_coefficients
+            cumulative_hazard = self.get_cumulative_hazards(hazard, cur_beta_coefficients)
+            cumulative_hazards.append(pd.DataFrame({'x': times, 'y': cumulative_hazard}))
+            hazard_at_event = np.concatenate([hazard_at_event, get_hazard_at_event(cur_x, times, cumulative_hazard)])
+        return beta_coefficients, hazard_at_event, cumulative_hazards
 
-            convergence = get_estimators_convergence(old_betas, self.beta_coefficients_estimators,
-                                                     old_frailty_covariance, self.frailty_covariance_estimators)
-
-            if math.isnan(convergence):
-                break
-            iteration_cnt += 1
+    def get_z_mean(self):
+        return self.model.Z.mean(axis=0).T
 
     def get_beta_z(self):
         beta_z = np.zeros(shape=(self.model.n_clusters, self.model.n_members, self.model.n_competing_risks))
