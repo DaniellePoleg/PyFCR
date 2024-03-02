@@ -7,7 +7,7 @@ A Python package for frailty-based multivariate survival data analysis with comp
 ```console
 pip install PyFCR
 ```
-A pre-requisite is having python 3.10 installed
+A pre-requisite is having python 3.10 installed on windows and python 3.11 on MAC
 
 ## Quick Start
 This package has 2 run types:
