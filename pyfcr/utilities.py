@@ -109,20 +109,19 @@ def flat_array(arr):
             res[i * m + j] = arr[i][j]
     return res
 
-#todo: also used by Assaf's model
+
 def get_estimators_convergence(old_betas, current_betas, old_frailty_covariance, cuurent_frailty_covariance):
     convergence_betas = np.sum(np.abs(old_betas - current_betas))
     convergence_frailty_covariance = np.sum(np.abs(old_frailty_covariance - cuurent_frailty_covariance))
     return convergence_betas + convergence_frailty_covariance
 
-#todo: also used by Assaf's model
+
 def get_hazard_at_event(X, times, cumulative_hazard):
     step_function = stats.stepfun(x=FloatVector(times), y=FloatVector([0] + cumulative_hazard))
     cur_hazard_at_event = numpy2ri.rpy2py(step_function(FloatVector(X)))
     return cur_hazard_at_event
 
 
-#todo: this should also be used by Assaf's model
 def parse_cox_estimators(formula, data, cox_weights):
     try:
         cox_res = survival.coxph(formula, data=DataFrame(data), weights=FloatVector(cox_weights), ties="breslow")
