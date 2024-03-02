@@ -57,7 +57,6 @@ class FCRDataModel:
     def get_z_dimension(self):
         raise NotImplementedError
 
-
     def read_data(self, data_path):
         self.deltas = np.loadtxt(os.path.join(data_path, "deltas.csv"), delimiter=',').reshape(
             (self.n_clusters, self.n_members, self.n_competing_risks))
@@ -108,8 +107,8 @@ class Runner:
             self.random_cox_weights = random_cox_weights / random_cox_weights.mean()
             self.single_run()
             self.estimators_df.loc[boot] = [self.beta_coefficients_estimators, self.frailty_covariance_estimators,
-                                       self.get_cumulative_hazard_estimators()
-                                       ]
+                                            self.get_cumulative_hazard_estimators()
+                                            ]
         self.beta_coefficients_res, self.frailty_covariance_res, self.cumulative_hazards_res = self.reshape_estimators_from_df(
             self.estimators_df, self.model.n_bootstrap)
 
@@ -150,9 +149,11 @@ class Runner:
 
     def get_frailty_estimators(self, hazard_at_event):
         rowSums, gauss_hermite_points, gauss_hermite_weights, beta_z = self.get_frailty_estimators_arguments()
-        self.frailty_covariance_estimators = self.calculate_frailty_covariance_estimators([rowSums, gauss_hermite_points, gauss_hermite_weights, hazard_at_event, beta_z, self.random_cox_weights])
+        self.frailty_covariance_estimators = self.calculate_frailty_covariance_estimators(
+            [rowSums, gauss_hermite_points, gauss_hermite_weights, hazard_at_event, beta_z, self.random_cox_weights])
         self.frailty_exponent = self.calculate_frailty_exponent_estimators([rowSums, gauss_hermite_points,
-                                                                     gauss_hermite_weights, hazard_at_event, beta_z])
+                                                                            gauss_hermite_weights, hazard_at_event,
+                                                                            beta_z])
 
     def get_delta_sums(self):
         return NotImplementedError
@@ -181,7 +182,6 @@ class Runner:
             dataframe[cur_Z_name] = cur_Z
         return formula, dataframe
 
-
     def get_cumulative_hazards(self, hazard, beta_coefficients):
         if self.model.uniform:
             z_mean = self.get_z_mean()
@@ -205,7 +205,78 @@ class Runner:
         sums = np.sum(x, where=~np.isnan(x), axis=0)
         return sums / (self.model.n_simulations - 1)
 
+    def print_estimators(self, df, mean, standard_error, standard_deviation, getter):
+        for i in range(self.model.n_competing_risks):
+            df.loc[f'competing_risk_{i + 1}_param'] = getter(mean, i)
+            df.loc[f'competing_risk_{i + 1}_SE'] = getter(standard_error, i)
+            if standard_deviation is not None:
+                df.loc[f'competing_risk_{i + 1}_SD'] = getter(standard_deviation, i)
+        directory = "\\results"
+        os.makedirs(directory, exist_ok=True)
+        file_name = df.columns[0].split('_')[0]
+        df.to_csv(f"{directory}\\{file_name}.csv")
+        print(df.round(4))
 
+    def print_betas(self, mean, standard_error, standard_deviation) -> None:
+        raise NotImplementedError
+
+    def print_cumulative_hazards(self, mean, standard_error, standard_deviation) -> None:
+        raise NotImplementedError
+
+    def print_frailty_covariance(self, mean, standard_error, standard_deviation) -> None:
+        df = pd.DataFrame(columns=[f'frailty_covariance_comp_risk_{i}_comp_risk_{j}' for i in
+                                   range(1, self.model.n_competing_risks + 1) for j in
+                                   range(1, self.model.n_competing_risks + 1)
+                                   if i <= j])
+        data = {'param': mean, 'SE': standard_error}
+        if standard_deviation is not None:
+            data['SD'] = standard_deviation
+        for key, value in data.items():
+            df.loc[key] = [value[i][j] for i in range(self.model.n_competing_risks) for j in
+                           range(self.model.n_competing_risks) if i <= j]
+        os.makedirs('results', exist_ok=True)
+        df.to_csv("\\results\\frailty_covariance.csv")
+        print(df.round(4))
+
+    def analyze_statistical_results(self, empirical_run=True, multi_estimators_df=None):
+        mean_betas_vars = None
+        mean_sigmas_vars = None
+        mean_cums_vars = None
+
+        axis = 0
+        mean_beta_coefficients = self.beta_coefficients_res.mean(axis=axis)
+        mean_frailty_covariance = self.frailty_covariance_res.mean(axis=axis)
+        mean_cumulative_hazards = np.nanmean(self.cumulative_hazards_res, axis=axis)
+
+        if empirical_run:
+            var_beta_coefficients = self.calculate_empirical_variance(self.beta_coefficients_res,
+                                                                      mean_beta_coefficients)
+            var_frailty_covariance = self.calculate_empirical_variance(self.frailty_covariance_res,
+                                                                       mean_frailty_covariance)
+            var_cumulative_hazard = self.calculate_empirical_variance(self.cumulative_hazards_res,
+                                                                      mean_cumulative_hazards)
+            if multi_estimators_df is not None:
+                betas_vars, sigmas_vars, cums_vars = self.reshape_estimators_from_df(
+                    multi_estimators_df.iloc[:, 3:6],
+                    self.model.n_simulations)
+                mean_betas_vars = np.mean(betas_vars, axis=0)
+                mean_sigmas_vars = np.mean(sigmas_vars, axis=0)
+                mean_cums_vars = np.nanmean(cums_vars, axis=0)
+
+            pd.set_option('display.max_columns', None)
+            self.print_betas(mean_beta_coefficients, var_beta_coefficients, mean_betas_vars)
+            self.print_frailty_covariance(mean_frailty_covariance, var_frailty_covariance, mean_sigmas_vars)
+            self.print_cumulative_hazards(mean_cumulative_hazards, var_cumulative_hazard, mean_cums_vars)
+
+        else:
+            var_beta_coefficients = self.beta_coefficients_res.var(axis=axis)
+            var_frailty_covariance = self.frailty_covariance_res.var(axis=axis)
+            var_cumulative_hazard = np.nanvar(self.cumulative_hazards_res, axis=axis)
+
+        return mean_beta_coefficients, mean_frailty_covariance, mean_cumulative_hazards, var_beta_coefficients, \
+            var_frailty_covariance, var_cumulative_hazard
+
+    # todo: this is not used in Assaf
     def get_multiple_confidence_intervals(self):
         a = calculate_conf_interval(self.beta_coefficients_res, self.model.n_competing_risks)
         b = calculate_conf_interval(self.frailty_covariance_res, self.model.n_competing_risks)
@@ -223,11 +294,8 @@ class Runner:
     def get_estimators_dimensions(self, n_repeats: int) -> None:
         raise NotImplementedError
 
-    def analyze_statistical_results(self, empirical_run: bool) -> None:
-        raise NotImplementedError
-
     def print_summary(self) -> None:
-        self.analyze_statistical_results(empirical_run=True)
+        self.analyze_statistical_results(empirical_run=True, multi_estimators_df=None)
 
     def visualize_results(self) -> None:
         visualize_results(self.beta_coefficients_res, self.frailty_covariance_res)
