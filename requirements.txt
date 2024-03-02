@@ -1,0 +1,6 @@
+rpy2
+numpy
+pandas
+ninja
+cmake
+matplotlib
